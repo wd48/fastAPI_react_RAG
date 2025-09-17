@@ -3,17 +3,18 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpoint
-from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.vectorstores import Qdrant
 from langchain.chains.retrieval_qa.base import RetrievalQA
+from langchain_community.llms import Ollama
+from qdrant_client import QdrantClient
 
 # .env 파일에서 환경 변수 로드
-load_dotenv()
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 app = FastAPI()
 
-# React Frontend와 통신을 위한 CORS 설정 (이전과 동일)
+# React Frontend와 통신을 위한 CORS 설정
 origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 app.add_middleware(
     CORSMiddleware,
@@ -26,27 +27,29 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     query: str
 
-# RAG 모델 로드 (Hugging Face 모델로 변경)
-# 1. 임베딩 모델 로드
-embeddings = HuggingFaceEmbeddings(
-    model_name="jhgan/ko-sbert-nli",
-    model_kwargs={'device': 'cpu'},
-    encode_kwargs={'normalize_embeddings': True},
+# RAG 모델 로드 (Ollama와 Qdrant로 변경)
+# 1. Ollama 임베딩 모델 로드
+embeddings = OllamaEmbeddings(
+    model="bge-m3:latest",
+    base_url=os.getenv("OLLAMA_BASE_URL")
 )
 
-# 2. FAISS 인덱스 로드
-db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-retriever = db.as_retriever()
+# 2. Qdrant 클라이언트 및 vector_store 인스턴스 생성
+client = QdrantClient(url=os.getenv("QDRANT_URL"))
+vector_store = Qdrant(
+    client=client,
+    collection_name="rag_collection",
+    embeddings=embeddings,
+)
+retriever = vector_store.as_retriever()
 
-# 3. LLM 모델 변경 (HuggingFaceEndpoint 사용)
-# repo_id: Hugging Face에 있는 모델 ID
-llm = HuggingFaceEndpoint(
-    repo_id="google/gemma-2b-it",
-    temperature=0.1,
-    max_new_tokens=512,
+# 3. Ollama LLM 모델 변경
+llm = Ollama(
+    model="gemma3n:latest",
+    base_url=os.getenv("OLLAMA_BASE_URL")
 )
 
-# RetrievalQA 체인 생성 (이전과 동일)
+# RetrievalQA 체인 생성
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm,
     chain_type="stuff",
